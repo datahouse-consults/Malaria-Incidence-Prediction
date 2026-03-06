@@ -32,6 +32,7 @@ library(patchwork)
 library(tseries)
 library(lme4)
 library(forecast)
+library(lubridate)
 library(kableExtra)
 ```
 
@@ -136,8 +137,115 @@ incidence_dat <- incidence_data %>%
   #calculate incidence per 1,000 population
   mutate(incidence_per_1k = Incidence / (Population / 1000))
 
-
+head(incidence_dat)
 ```
+
+```{r fig.height= 6, fig.width=10}
+incidence_dat %>%
+  group_by(District) %>%
+  # Remove central hospitals 
+  filter(!str_detect(District, "Hospital")) %>%
+  summarise(mean_inc = mean(incidence_per_1k, na.rm = TRUE),
+            sd_inc = sd(incidence_per_1k, na.rm = TRUE),
+            n = n(),
+            se_inc = sd_inc / sqrt(n)) %>%
+  ggplot(aes(x = reorder(District, mean_inc), y = mean_inc)) +
+  geom_col(fill = "steelblue") +
+  geom_errorbar(aes(ymin = mean_inc - se_inc, ymax = mean_inc + se_inc), width = 0.2) +
+  coord_flip() +
+  labs(title = "Mean Malaria OPD Incidence Per 1000 Population by District (2018-2024)",
+       x = "District", 
+       y = "Mean Incidence per 1000 population") +
+  theme_bw() +
+  # Control font sizes
+  theme(
+    plot.title = element_text(size = 18, face = "bold"),    # Main title
+    axis.title = element_text(size = 16, face = "bold"),    # Axis labels (District/Incidence)
+    axis.text = element_text(size = 14),                    # Axis tick labels (District names)
+    plot.subtitle = element_text(size = 14),
+    axis.text.y = element_text(size = 11)                   # Specific control for District names
+  )
+
+# 1. Define the official district stratification from the Wellcome Open Research paper
+highest_burden <- c("Nkhotakota", "Salima", "Mchinji", "Dowa", "Ntchisi", 
+                    "Mwanza", "Likoma", "Lilongwe", "Kasungu", "Mangochi")
+
+high_burden <- c("Chitipa", "Rumphi", "Nkhatabay", "Dedza", "Ntcheu", 
+                 "Neno", "Thyolo", "Nsanje", "Zomba", "Mzimba", "Mulanje")
+
+moderate_burden <- c("Karonga", "Chikwawa", "Balaka", "Machinga", 
+                     "Phalombe", "Blantyre", "Chiradzulu")
+
+# 2. Clean data (remove central hospitals) and assign the official strata
+clean_data <- incidence_dat %>%
+  filter(!str_detect(District, "Hospital")) %>%
+  mutate(Burden_Group = case_when(
+    District %in% highest_burden ~ "Highest Burden",
+    District %in% high_burden ~ "High Burden",
+    District %in% moderate_burden ~ "Moderate Burden",
+    TRUE ~ "Unknown" # Just in case any district name is misspelled in the raw data
+  )) %>%
+  filter(Burden_Group != "Unknown") # Keep only valid matched districts
+
+# 3. Aggregate Data to the Stratum Level and National Level
+group_monthly <- clean_data %>%
+  group_by(Burden_Group, Year, Month) %>%
+  summarise(monthly_inc = mean(incidence_per_1k, na.rm = TRUE), .groups = 'drop') %>%
+  rename(Level = Burden_Group)
+
+national_monthly <- clean_data %>%
+  group_by(Year, Month) %>%
+  summarise(monthly_inc = mean(incidence_per_1k, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(Level = "National")
+
+# Combine them all and set the exact panel order for the plot
+combined_monthly <- bind_rows(national_monthly, group_monthly) %>%
+  mutate(Level = factor(Level, levels = c("National", "Highest Burden", "High Burden", "Moderate Burden")))
+
+# 4. Calculate Historical Baselines and Z-Scores for Each Panel
+zscore_data <- combined_monthly %>%
+  group_by(Level, Month) %>%
+  mutate(
+    hist_mean = mean(monthly_inc, na.rm = TRUE),
+    hist_sd = sd(monthly_inc, na.rm = TRUE),
+    z_score = ifelse(hist_sd > 0, (monthly_inc - hist_mean) / hist_sd, 0)
+  ) %>%
+  ungroup() %>%
+  mutate(Month_Lab = factor(Month, levels = 1:12, 
+                            labels = c("Jan", "Feb", "Mar", "Apr", "May", "Jun", 
+                                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")))
+
+# 5. Plot the 4-Panel Official Stratification Heatmap
+ggplot(zscore_data, aes(x = Month_Lab, y = factor(Year), fill = z_score)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "steelblue", mid = "white", high = "darkred", midpoint = 0, name = "Z-Score") +
+  # Add symbols based on WHO thresholds
+  geom_text(aes(label = case_when(
+    z_score > 2.0 ~ "!",    # Outbreak
+    z_score > 1.65 ~ "*",   # Early Warning
+    TRUE ~ ""
+  )), color = "white", fontface = "bold", size = 5) +
+  facet_wrap(~Level, ncol = 2) +
+  labs(
+    title = "Malaria Epidemic Monitoring by Official NMCP Strata",
+    subtitle = "Markers: [ ! ] Confirmed Outbreak (Z > 2.0)  |  [ * ] Early Warning (Z > 1.65)",
+    x = "Month",
+    y = "Year",
+    caption = "Strata based on the 2023-2030 Malawi Malaria Strategic Plan (Mategula et al., 2023;Wellcome Open Research)"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 18, face = "bold"),
+    strip.text = element_text(size = 14, face = "bold"),
+    axis.text = element_text(size = 12),
+    plot.subtitle = element_text(size = 14),
+    axis.title = element_text(size = 16, face = "bold"),
+    strip.background = element_rect(fill = "grey90", color = NA)
+  )
+```
+
+
 ##Forecasting using ARIMA
 
 ARIMA (Autoregressive Integrated Moving Average) models are widely used for time series forecasting due to their flexibility and effectiveness in capturing linear temporal patterns in data across fields like finance, health, and engineering etc.
@@ -178,7 +286,7 @@ Most of the analysis here will use the in-built functions for time series analys
 incidence_dat <- incidence_dat %>%
   mutate(Month = match(Month, month.name)) %>%
   arrange(Year, Month)
-
+incidence_dat
 ```
 
 Prepare the data, check for trends, seasonality, and outliers, select p,d,q using ACF or PACF to build time series analysis
