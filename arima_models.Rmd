@@ -141,7 +141,7 @@ head(incidence_dat)
 ```
 
 ```{r fig.height= 6, fig.width=10}
-incidence_dat %>%
+incidence<-incidence_dat %>%
   group_by(District) %>%
   # Remove central hospitals 
   filter(!str_detect(District, "Hospital")) %>%
@@ -216,7 +216,7 @@ zscore_data <- combined_monthly %>%
                                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")))
 
 # 5. Plot the 4-Panel Official Stratification Heatmap
-ggplot(zscore_data, aes(x = Month_Lab, y = factor(Year), fill = z_score)) +
+heatmap<-ggplot(zscore_data, aes(x = Month_Lab, y = factor(Year), fill = z_score)) +
   geom_tile(color = "white") +
   scale_fill_gradient2(low = "steelblue", mid = "white", high = "darkred", midpoint = 0, name = "Z-Score") +
   # Add symbols based on WHO thresholds
@@ -243,6 +243,8 @@ ggplot(zscore_data, aes(x = Month_Lab, y = factor(Year), fill = z_score)) +
     axis.title = element_text(size = 16, face = "bold"),
     strip.background = element_rect(fill = "grey90", color = NA)
   )
+ggsave("images/mean_malaria_incidence.png", plot = incidence, width = 12, height = 5, units = "in")
+ggsave("images/alert_heatmaps.png", plot = heatmap, width = 12, height = 5, units = "in")
 ```
 
 
